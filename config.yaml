@@ -1,0 +1,22 @@
+Model:
+  in_channels: 12
+  num_classes: 5
+  model_type: 'Unet'
+
+Loader:
+  train_bs: 2
+  val_bs: 2
+
+Optimizer:
+  type: 'Adam'
+  lr: 0.001
+
+Losses:
+  type: ['bce', 'dice']
+  weight: True
+
+Train:
+  epochs: 100
+  device: 'cuda:1'
+  bce_gain: 1
+  dice_gain: 1

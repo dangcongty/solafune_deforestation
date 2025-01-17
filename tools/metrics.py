@@ -49,7 +49,6 @@ class F1_Metrics:
         gt_matched = np.zeros(len(gt_polygons))
         pred_matched = np.zeros(len(pred_polygons))
 
-        # IoU計算とマッチング候補の特定
         gt_matched = np.zeros(len(gt_polygons))
         pred_matched = np.zeros(len(pred_polygons))
         for gt_idx, gt_polygon in enumerate(gt_polygons):
@@ -81,26 +80,34 @@ class F1_Metrics:
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         return f1, precision, recall
 
-def compute_iou(pred, gt, threshold = 0.5, epsilon=1e-6):
+def compute_iou(pred, gt, num_classes = 5, epsilon=1e-6):
     """
     Computes the Intersection over Union (IoU) metric for semantic segmentation.
     
     Args:
         pred (torch.Tensor): Predicted segmentation, shape (Batchsize, num_classes, H, W).
-        gt (torch.Tensor): Ground truth segmentation, shape (Batchsize, num_classes, H, W).
+        gt (torch.Tensor): Ground truth segmentation, shape (Batchsize, H, W).
         epsilon (float): Small value to avoid division by zero.
         
     Returns:
         torch.Tensor: IoU score for each class, shape (num_classes,).
     """
     # Ensure predictions are binary or probabilities
-    pred = (pred > threshold).float()  # Thresholding predicted probabilities at 0.5
+    pred = pred.argmax(1) 
 
     # Compute intersection and union for each class
-    intersection = torch.sum(pred * gt, dim=(0, 2, 3))  # Sum over spatial dimensions and batch
-    union = torch.sum(pred + gt, dim=(0, 2, 3)) - intersection  # Union = A + B - Intersection
+    ious = []
+    for i in range(num_classes):
+        pred_i = (pred==i).float()
+        gt_i = (gt==i).float()
+        intersection = torch.sum(pred_i * gt_i, dim=(1, 2))
+        union = torch.sum(pred_i + gt_i, dim=(1, 2)) - intersection  
+        iou = intersection / (union + epsilon)  
+        ious.append(iou)
+    ious = torch.stack(ious).mean(1)
+    return ious
 
-    # Compute IoU
-    iou = intersection / (union + epsilon)  # Add epsilon to avoid division by zero
-
-    return iou
+if __name__ == "__main__":
+    a = torch.rand((2, 5, 10, 10))
+    b = torch.rand((2, 5, 10, 10))
+    compute_iou(a, b)

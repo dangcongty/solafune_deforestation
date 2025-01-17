@@ -1,22 +1,29 @@
 Model:
   in_channels: 12
-  num_classes: 5
+  num_classes: 4
   model_type: 'Unet'
 
 Loader:
-  train_bs: 2
-  val_bs: 2
+  train_bs: 1
+  val_bs: 1
 
 Optimizer:
   type: 'Adam'
   lr: 0.001
 
 Losses:
-  type: ['bce', 'dice']
+  type: ['focal', 'dice', 'ct']
   weight: True
 
 Train:
-  epochs: 100
+  epochs: 1000
   device: 'cuda:1'
-  bce_gain: 1
+  focal_gain: 1
   dice_gain: 1
+  ct_gain: 10
+
+Test:
+  model_weight: 'ckpt/v25/best.pth'
+  device: 'cuda:0'
+  threshold: 0.5
+  min_area: 10000

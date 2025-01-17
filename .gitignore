@@ -4,3 +4,10 @@ ckpt/
 .vscode/
 test.jpg
 __pycache__/
+*.jpg
+*.pt
+*.csv
+*.json
+*.sh
+contrastive/
+outputs

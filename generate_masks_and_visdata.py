@@ -14,21 +14,18 @@ os.makedirs(f'{root}/vis', exist_ok=True)
 
 with open(f'{root}/train_annotations.json', 'r') as f:
     annotations = json.load(f)
-class_names = ["grassland_shrubland", "logging", "mining", "plantation", 'background']
+class_names = ["grassland_shrubland", "logging", "mining", "plantation"]
 colors = {
     'grassland_shrubland': (255, 0, 0),
     'logging': (0, 255, 0),
     'mining': (0, 0, 255),
     'plantation': (255, 255, 255),
-    'background': (0, 0, 0),
-
 }
 pixel_count = {
     'grassland_shrubland': 0,
     'logging': 0,
     'mining': 0,
     'plantation': 0,
-    'background': 0
 }
 for anno in tqdm(annotations['images']):
     file_name = anno['file_name']
@@ -40,7 +37,7 @@ for anno in tqdm(annotations['images']):
     rgb_image = np.nan_to_num(rgb_image, nan=0)
     rgb_image = cv2.normalize(rgb_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-    mask = np.zeros((h, w, 5)).astype(np.uint8)
+    mask = np.zeros((h, w, 4)).astype(np.uint8)
     bg_mask = np.zeros((h, w)).astype(np.uint8)
     for lb in labels:
         c = lb['class']
@@ -52,14 +49,21 @@ for anno in tqdm(annotations['images']):
         rgb_image = cv2.polylines(rgb_image, [poly.reshape((-1, 1, 2))], True, colors[c], 2)
     bg_mask = np.where(bg_mask!=0, 0, 1)
     mask[:, :, -1] = bg_mask
-    pixel_count['background'] += bg_mask.sum()
-    # cv2.imwrite(f'{root}/vis/{file_name[:-4]}.jpg', rgb_image)
-    # np.save(f'{root}/train_masks/{file_name[:-4]}.npy', mask)
+    # pixel_count['background'] += bg_mask.sum()
+    cv2.imwrite(f'{root}/vis/{file_name[:-4]}.jpg', rgb_image)
+    np.save(f'{root}/train_masks/{file_name[:-4]}.npy', mask)
+
+total_pixels = sum(pixel_count.values())
+pixel_per_class = []
+for c in pixel_count:
+    pixel_per_class.append(pixel_count[c]/total_pixels)
+pixel_per_class = np.array(pixel_per_class)
+inverse = 1.0 / pixel_per_class
+# weight_classes = inverse / np.sum(inverse)
+np.save('dataset/weight_classes.npy', inverse)
+
 
 # data visualize
-total_pixels = sum(pixel_count.values())
-for c in pixel_count:
-    print(pixel_count[c]/total_pixels)
 categories = list(pixel_count.keys())
 values = list(pixel_count.values())
 vis_colors = ['#FF6347', '#4682B4', '#32CD32', '#FFD700', '#8A2BE2']  # Different colors for each category

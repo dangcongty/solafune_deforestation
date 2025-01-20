@@ -31,9 +31,8 @@ class Augmentation:
         else:
             return img, mask
 
-    def rotate(self, img: np.ndarray, mask: np.ndarray, angle_range: list, p: float):
+    def rotate(self, img: np.ndarray, mask: np.ndarray, angle: int, p: float):
         def apply(array, angle):
-
             C, H, W = array.shape
             cx, cy = W // 2, H // 2  # Center of the image
             theta = np.radians(angle) # Convert angle to radians
@@ -61,7 +60,7 @@ class Augmentation:
             return rotated_array
         
         if np.random.random() > p:
-            angle = np.random.randint(angle_range[0], angle_range[1])
+            angle = np.random.randint(-angle, angle)
             rotated_image = apply(img, angle)
             rotated_mask = apply(mask[None, :, :], angle)[0]
 
@@ -69,11 +68,65 @@ class Augmentation:
         else:
             return img, mask
 
-    def translate():
-        pass
+    def translate(self, img: np.ndarray, mask: np.ndarray, shift_ratio: int, p: float):
+        if np.random.random() > p:
+            percent_shift = np.random.randint(0, shift_ratio) # phần trăm shift
+
+            shift_direct = np.random.choice(['lr', 'td', 'both']) # shift top-down or left-right?
+            shifted_img = np.zeros_like(img) # C x H x W
+            shifted_mask = np.zeros_like(mask) # H x W
+            h, w = shifted_mask.shape
+
+            if shift_direct == 'lr':
+                shift = int(percent_shift*w/100)
+                if np.random.random() > 0.5: # shift left
+                    shifted_img[:, :, :w-shift] = img[:, :, shift:]
+                    shifted_mask[:, :w-shift] = mask[:, shift:]
+                else:
+                    shifted_img[:, :, shift:] = img[:, :, :w-shift]
+                    shifted_mask[:, shift:] = mask[:, :w-shift]
+
+            elif shift_direct == 'ud':
+                shift = int(percent_shift*h/100)
+                if np.random.random() > 0.5: # shift down
+                    shifted_img[:, :h-shift, :] = img[:, shift:, :]
+                    shifted_mask[:h-shift, :] = mask[shift:, :]
+                else:
+                    shifted_img[:, shift:, :] = img[:, :h-shift, : ]
+                    shifted_mask[shift:, :] = mask[:h-shift, : ]
+
+            else:
+                shift_w = int(percent_shift*h/100)
+                shift_h = int(percent_shift*w/100)
+                if np.random.random() > 0.5: # shift left
+                    shifted_img[:, :, :w-shift_w] = img[:, :, shift_w:]
+                    shifted_mask[:, :w-shift_w] = mask[:, shift_w:]
+                else:
+                    shifted_img[:, :, shift_w:] = img[:, :, :w-shift_w]
+                    shifted_mask[:, shift_w:] = mask[:, :w-shift_w]
+
+                if np.random.random() > 0.5: # shift down
+                    shifted_img[:, :h-shift_h, :] = shifted_img[:, shift_h:, :]
+                    shifted_mask[:h-shift_h, :] = shifted_mask[shift_h:, :]
+                    shifted_img[:, h-shift_h:, :] = 0
+                    shifted_mask[h-shift_h:, :] = 0
+                else:
+                    shifted_img[:, shift_h:, :] = shifted_img[:, :h-shift_h, : ]
+                    shifted_mask[shift_h:, :] = shifted_mask[:h-shift_h, : ]
+                    shifted_img[:, :shift_h, :] = 0
+                    shifted_mask[:shift_h, :] = 0
+            return shifted_img, shifted_mask
+        
+        else:
+            return img, mask
     
+    def dropout(self, img: np.ndarray, mask: np.ndarray, shift_ratio: int, p: float):
+        # Nếu dropout ngay giữa segment có mất đi thông tin về cấu trúc của object ko ?
+        pass
+
+
 if __name__ == '__main__':
     aug = Augmentation()
-    img = cv2.imread('dataset/vis/train_0.jpg')
+    img = cv2.imread('dataset/vis/train_0.jpg').transpose((-1, 0, 1))
     mask = np.load('dataset/train_masks/train_0.npy').argmax(-1)
-    aug.rotate(img, mask, [0, 30], 0.5)
+    aug.translate(img, mask, 25, 0.5)

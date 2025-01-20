@@ -11,6 +11,9 @@ from concurrent.futures import ProcessPoolExecutor
 
 import torch.nn.functional as F
 import yaml
+import sys
+sys.path.append(os.getcwd())
+from tools import Augmentation
 
 def set_seed(seed=3107):
     np.random.seed(seed)
@@ -24,7 +27,7 @@ def set_seed(seed=3107):
 set_seed()
 class Data(Dataset):
     def __init__(self, mode = 'train', config = None):
-
+        
         self.mean = np.load('dataset/mean.npy')
         self.std = np.load('dataset/std.npy')
 
@@ -46,6 +49,9 @@ class Data(Dataset):
 
         self.config = config
         self.down = self.config['Loader']['down']
+
+        self.augs = Augmentation()
+        self.mode = mode
 
     def load_data(self, path):
         mask_path = f'dataset/train_masks/{os.path.basename(path)[:-4]}npy'
@@ -98,12 +104,15 @@ class Data(Dataset):
         h, w = image.shape[1:]
         mask = self.masks[index]
         mask = mask.argmax(0) 
+
+        if self.mode == 'train':
+            image, mask = self.augs.flip_lr(image, mask, 0.5)
+            image, mask = self.augs.flip_ud(image, mask, 0.5)
+            image, mask = self.augs.rotate(image, mask, 45, 0.5)
+            image, mask = self.augs.translate(image, mask, 25, 0.5)
+
         mask = torch.from_numpy(mask)
         image = torch.from_numpy(image)
-        # masks = []
-        # for d in self.down:
-        #     m = F.interpolate(mask.unsqueeze(0).unsqueeze(0).float(), scale_factor=1/d, mode='nearest').squeeze().long()
-        #     masks.append(m)
         return image, mask
 
 if __name__ == '__main__':

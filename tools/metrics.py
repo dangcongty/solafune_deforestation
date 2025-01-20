@@ -95,7 +95,7 @@ def compute_iou(pred, gt, num_classes = 5, threshold = 0.5, epsilon=1e-6):
         torch.Tensor: IoU score for each class, shape (num_classes,). tensor([0.0869, 0.0721, 0.1962, 0.1404, 0.0406])
     """
     # Ensure predictions are binary or probabilities
-    pred[pred < threshold] = 0 
+    # pred[pred < threshold] = 0 
     pred = pred.argmax(1) 
 
     # Compute intersection and union for each class

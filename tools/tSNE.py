@@ -31,7 +31,7 @@ config_file = 'config.yaml'
 with open(config_file, 'r') as f:
     config = yaml.safe_load(f)
 model = Unet(in_chan=config['Model']['in_channels'], num_classes=config['Model']['num_classes'])
-model.load_state_dict(torch.load('ckpt/v1/best.pth', weights_only=True))
+model.load_state_dict(torch.load('ckpt/v1/checkpoint.pth')['model_state_dict'])
 model.eval()
 model.to('cuda:0')
 

@@ -15,7 +15,9 @@ from skimage import measure
 from tqdm import tqdm
 
 from models.unet_v2 import Unet
+from models.yolo import YOLOSeg
 from tools.metrics import F1_Metrics
+import torch.nn.functional as F
 
 
 class Inference:
@@ -28,7 +30,8 @@ class Inference:
 
     def __init_model(self):
         model_config = self.config['Model']
-        self.model = Unet(in_chan=model_config['in_channels'], num_classes=model_config['num_classes'])
+        self.model = YOLOSeg(config_file = model_config['config_file'], scale = model_config['scale'])
+        # self.model = Unet(in_chan=model_config['in_channels'], num_classes=model_config['num_classes'])
         self.model.load_state_dict(torch.load(self.config['Test']['model_weight'], map_location='cpu', weights_only=True))
         self.model.eval()
 
@@ -54,10 +57,13 @@ class Inference:
             image = self.load_image(path)
             image = torch.from_numpy(image).unsqueeze(0).to(device)
             with torch.no_grad():
-                pred = self.model(image).sigmoid().cpu().numpy()
+                pred = self.model(image)[0][0].softmax(1).cpu()
+                pred[pred<0.5] = 0
+                pred = pred.argmax(1)
+                pred = F.interpolate(pred.unsqueeze(0).float(), scale_factor=2).squeeze().long().numpy()
             np.save(f'outputs/train_set/{os.path.basename(path)[:-4]}.npy', pred)
 
-        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255), (0, 0, 0)]
+        colors = [(0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)]
         for path in tqdm(glob(f'outputs/train_set/*.npy')):
             name = os.path.basename(path)[:-4]
             image = tifffile.imread(f'dataset/train_images/{name}.tif')
@@ -101,11 +107,11 @@ class Inference:
 
     def post_process(self, path):
         test_config = self.config['Test']
-        class_names = ["grassland_shrubland", "logging", "mining", "plantation", "background"]
+        class_names = ["background", "grassland_shrubland", "logging", "mining", "plantation"]
         polygons_all_imgs = {}
         for path in tqdm(glob(f'{path}/*.npy')):
             polygons_all_classes = {}
-            pred_mask = np.load(path)[0]
+            pred_mask = np.load(path)
             for i, class_name in enumerate(class_names):
                 label = measure.label(pred_mask[i] > test_config['threshold'], connectivity=2, background=0).astype(np.uint8)
                 polygons = []
@@ -148,7 +154,8 @@ class Inference:
             image = self.load_image(path)
             image = torch.from_numpy(image).unsqueeze(0).to(device)
             with torch.no_grad():
-                pred = self.model(image)[0].cpu().numpy()
+                pred = self.model(image)[0][0].detach().softmax(1).cpu()
+                pred = F.interpolate(pred.float(), scale_factor=2).squeeze().numpy()
             np.save(f'outputs/submit_set/{os.path.basename(path)[:-4]}.npy', pred)
 
         test_pred_polygons = self.post_process(path = 'outputs/submit_set')
@@ -171,4 +178,4 @@ class Inference:
 
 if __name__ == '__main__':
     inference = Inference(config_file='config.yaml')
-    inference.submission()
+    inference.visualize_result()

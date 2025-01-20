@@ -7,8 +7,10 @@ import tifffile
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
 
 import torch.nn.functional as F
+import yaml
 
 def set_seed(seed=3107):
     np.random.seed(seed)
@@ -21,33 +23,34 @@ def set_seed(seed=3107):
         torch.backends.cudnn.benchmark = False
 set_seed()
 class Data(Dataset):
-    def __init__(self, mode = 'train', datatype = 'contrastive'):
-        if mode == 'train':
-            self.paths = open('dataset/train.txt', 'r').readlines()
-            self.images = np.load('dataset/images_train.npy')
-            self.masks = np.load('dataset/masks_train.npy')
-        elif mode == 'val':
-            self.paths = open('dataset/val.txt', 'r').readlines()
-            self.images = np.load('dataset/images_val.npy')
-            self.masks = np.load('dataset/masks_val.npy')
+    def __init__(self, mode = 'train', config = None):
 
         self.mean = np.load('dataset/mean.npy')
         self.std = np.load('dataset/std.npy')
-        class_names = ["grassland_shrubland", "logging", "mining", "plantation", 'background']
 
-        # self.images = []
-        # self.masks = []
-        # for path in self.paths:
-        #     mask_path = f'dataset/train_masks/{os.path.basename(path)[:-4]}npy'
-        #     self.images.append(self.load_image(path))
-        #     self.masks.append(np.load(mask_path).transpose((2, 0, 1)))
-        # self.images = np.stack(self.images)
-        # self.masks = np.stack(self.masks)
-        # np.save('dataset/images_val.npy', self.images)
-        # np.save('dataset/masks_val.npy', self.masks)
+        if mode == 'train':
+            self.paths = open('dataset/kfold/train_0.txt', 'r').readlines()
+            # self.images = np.load('dataset/images_train.npy')
+            # self.masks = np.load('dataset/masks_train.npy')
+        elif mode == 'val':
+            self.paths = open('dataset/kfold/val_0.txt', 'r').readlines()
+            # self.images = np.load('dataset/images_val.npy')
+            # self.masks = np.load('dataset/masks_val.npy')
 
-        self.datatype = datatype
+        with ProcessPoolExecutor(max_workers=16) as executor:
+            results = list(executor.map(self.load_data, self.paths))    
 
+        self.images, self.masks = zip(*results)
+        self.images = np.stack(self.images)
+        self.masks = np.stack(self.masks)
+
+        self.config = config
+        self.down = self.config['Loader']['down']
+
+    def load_data(self, path):
+        mask_path = f'dataset/train_masks/{os.path.basename(path)[:-4]}npy'
+        return self.load_image(path), np.load(mask_path).transpose((2, 0, 1))
+    
     def normalize(self, image):
         image = np.transpose(image, (2, 0, 1)) # h w c => c h w
         image = (image - self.mean)/self.std 
@@ -90,27 +93,21 @@ class Data(Dataset):
     def __len__(self):
         return len(self.paths)
 
-
     def __getitem__(self, index):
         image = self.images[index]
+        h, w = image.shape[1:]
         mask = self.masks[index]
         mask = mask.argmax(0) 
-
-        image = torch.from_numpy(image)
         mask = torch.from_numpy(mask)
-
-        if self.datatype == 'contrastive':
-            index2 = np.random.randint(0, len(self.images))
-            image2 = self.images[index2]
-            mask2 = self.masks[index2]
-            mask2 = mask2.argmax(0) 
-
-            image2 = torch.from_numpy(image2)
-            mask2 = torch.from_numpy(mask2)
-            return image, mask, image2, mask2
-
+        image = torch.from_numpy(image)
+        # masks = []
+        # for d in self.down:
+        #     m = F.interpolate(mask.unsqueeze(0).unsqueeze(0).float(), scale_factor=1/d, mode='nearest').squeeze().long()
+        #     masks.append(m)
         return image, mask
 
 if __name__ == '__main__':
-    data = Data()
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+    data = Data(mode='train', config = config)
     data.__getitem__(0)

@@ -1,18 +1,21 @@
 Model:
   in_channels: 12
-  num_classes: 4
-  model_type: 'Unet'
+  num_classes: 5
+  model_type: 'YOLO'
+  config_file: 'models/yolo_config.yaml'
+  scale: 'n'
 
 Loader:
-  train_bs: 1
-  val_bs: 1
+  train_bs: 4
+  val_bs: 4
+  down: [2, 4, 8, 16, 32]
 
 Optimizer:
   type: 'Adam'
-  lr: 0.001
+  lr: 0.0001
 
 Losses:
-  type: ['focal', 'dice', 'ct']
+  type: ['focal', 'dice']
   weight: True
 
 Train:
@@ -23,7 +26,7 @@ Train:
   ct_gain: 10
 
 Test:
-  model_weight: 'ckpt/v25/best.pth'
-  device: 'cuda:0'
+  model_weight: 'ckpt/v1/best.pth'
+  device: 'cuda:1'
   threshold: 0.5
   min_area: 10000

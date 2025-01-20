@@ -13,7 +13,7 @@ from progress_table import ProgressTable
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from models.unet_v2 import Unet
+from models.yolo import YOLOSeg 
 from tools.dataset import Data
 from tools.metrics import compute_iou
 from tools.losses import DiceLoss, PixelWiseLabel, CEFocalLoss
@@ -30,7 +30,7 @@ def set_seed(seed=3107):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 set_seed()  
-class Trainer:
+class BaseTrainer:
     def __init__(self, config_file = 'config.yaml'):
         with open(config_file, 'r') as f:
             self.config = yaml.safe_load(f)
@@ -41,42 +41,43 @@ class Trainer:
         self.__init_optimizer()
         self.__init_metrics()
         self.__init_workspace()
-        self.class_names = ["grassland_shrubland", "logging", "mining", "plantation", 'background']
+        self.class_names = ['background', "grassland_shrubland", "logging", "mining", "plantation"]
 
     def __init_workspace(self):
         current_ver = len(os.listdir('ckpt')) + 1
         self.save_model_dir = f'ckpt/v{current_ver}'
         os.makedirs(self.save_model_dir, exist_ok=True)
         shutil.copyfile('config.yaml', f'{self.save_model_dir}/config.yaml')
-        shutil.copyfile('main.py', f'{self.save_model_dir}/main.py')
+        shutil.copyfile('train.py', f'{self.save_model_dir}/main.py')
         shutil.copytree('tools', f'{self.save_model_dir}/tools')
         shutil.copytree('models', f'{self.save_model_dir}/models')
 
         self.writer = SummaryWriter(log_dir=self.save_model_dir+'/log') 
 
     def __init_losses(self):
-        loss_config = self.config['Losses']
-        self.loss_fns = []
-        num_classes = self.config['Model']['num_classes']
-        weight_cls = torch.from_numpy(np.load('dataset/weight_classes.npy')).to(self.config['Train']['device']).to(torch.float)
-        if 'focal' in loss_config['type']:
-            focal_loss_fn = CEFocalLoss(weights=weight_cls, num_classes=num_classes)
-            self.loss_fns.append(focal_loss_fn)
-        if 'dice' in loss_config['type']:
-            dice_loss_fn = DiceLoss(num_classes=num_classes, reduction='mean', weight=weight_cls.reshape((-1)))
-            self.loss_fns.append(dice_loss_fn)
-        if 'ct' in loss_config['type']:
-            pwl_loss_fn = PixelWiseLabel()
-            self.loss_fns.append(pwl_loss_fn)
+        pass
+        # loss_config = self.config['Losses']
+        # self.loss_fns = []
+        # num_classes = self.config['Model']['num_classes']
+        # self.weight_cls = torch.from_numpy(np.load('dataset/weight_classes.npy')).to(self.config['Train']['device']).to(torch.float)
+        # if 'focal' in loss_config['type']:
+        #     focal_loss_fn = CEFocalLoss(weights=self.weight_cls, num_classes=num_classes)
+        #     self.loss_fns.append(focal_loss_fn)
+        # if 'dice' in loss_config['type']:
+        #     dice_loss_fn = DiceLoss(num_classes=num_classes, reduction='mean', weight=weight_cls.reshape((-1)))
+        #     self.loss_fns.append(dice_loss_fn)
+        # if 'ct' in loss_config['type']:
+        #     pwl_loss_fn = PixelWiseLabel()
+        #     self.loss_fns.append(pwl_loss_fn)
 
     def __init_model(self):
         model_config = self.config['Model']
-        self.model = Unet(in_chan=model_config['in_channels'], num_classes=model_config['num_classes'])
+        self.model = YOLOSeg(config_file = model_config['config_file'], scale = model_config['scale'])
 
     def __init_loader(self):
         loader_config = self.config['Loader']
-        train_data = Data(mode = 'train', datatype='contrastive')
-        val_data = Data(mode = 'val', datatype='normal')
+        train_data = Data(mode = 'train', config = self.config)
+        val_data = Data(mode = 'val', config = self.config)
 
         self.train_loader = DataLoader(train_data, 
                                   batch_size=loader_config['train_bs'],
@@ -102,15 +103,14 @@ class Trainer:
         losses = {}
         for loss in self.loss_fns:
             name = loss.__class__.__name__
+            losses[name] = 0
             if name == 'CEFocalLoss':
-                losses[name] = 0
                 losses[name] += loss(outputs.to(torch.float), masks.long())
                 if contrast:
                     losses[name] += loss(outputs_sup.to(torch.float), masks_sup.long())
             elif name == 'PixelWiseLabel':
                 losses[name] = loss(feat.to(torch.float), masks.long(), feat_sup.to(torch.float), masks_sup.long(), contrast)
             else:
-                losses[name] = 0
                 losses[name] += loss(outputs.to(torch.float), masks.long())
                 if contrast:
                     losses[name] += loss(outputs_sup.to(torch.float), masks_sup.long())
@@ -132,33 +132,38 @@ class Trainer:
                 'ct': []
             }
             ptable.update('Epoch', epoch, color="red")
-            for i, ((images, masks, images_sup, masks_sup)) in enumerate(ptable(self.train_loader, total=len(self.train_loader), description="Training phase")):
+            for i, ((images, masks)) in enumerate(ptable(self.train_loader, total=len(self.train_loader), description="Training phase")):
                 images = images.to(train_config['device'])
                 masks = masks.to(train_config['device'])
 
-                images_sup = images_sup.to(train_config['device'])
-                masks_sup = masks_sup.to(train_config['device'])
+                # images_sup = images_sup.to(train_config['device'])
+                # masks_sup = masks_sup.to(train_config['device'])
 
                 outputs, feat = self.model(images)
-                outputs_sup, feat_sup = self.model(images_sup)
-                losses = self.get_losses(outputs, masks, feat, outputs_sup, masks_sup, feat_sup)
-
+                loss = torch.nn.CrossEntropyLoss()(outputs, masks)
+                # outputs_sup, feat_sup = self.model(images_sup)
+                losses = self.get_losses(outputs, masks, feat, outputs, masks, feat)
+                losses['PixelWiseLabel'] = torch.tensor([0], device = losses['CEFocalLoss'].device) # TODO: remove
+                losses['CEFocalLoss'] = torch.tensor([0], device = losses['CEFocalLoss'].device) # TODO: remove
+                losses['DiceLoss'] = torch.tensor([0], device = losses['CEFocalLoss'].device) # TODO: remove
                 total_loss = train_config['focal_gain']*losses['CEFocalLoss'] \
                             + train_config['dice_gain']*losses['DiceLoss'] \
                             + train_config['ct_gain']*losses['PixelWiseLabel']
+                total_loss = loss
                 
                 self.optimizer.zero_grad()
                 total_loss.backward()
                 self.optimizer.step()
 
                 # log
-                train_losses['bce'].append((train_config['focal_gain']*losses['CEFocalLoss']).item())
+                train_losses['bce'].append(total_loss.item())
+                # train_losses['bce'].append((train_config['focal_gain']*losses['CEFocalLoss']).item())
                 train_losses['dice'].append((train_config['dice_gain']*losses['DiceLoss']).item())
                 train_losses['ct'].append((train_config['ct_gain']*losses['PixelWiseLabel']).item())
 
                 ptable.update('Loss BCE', np.mean(train_losses['bce']), aggregate="mean", color="blue")
-                ptable.update('Loss Dice', np.mean(train_losses['dice']), aggregate="mean", color="green")
-                ptable.update('Loss CT', np.mean(train_losses['ct']), aggregate="mean", color="red")
+                # ptable.update('Loss Dice', np.mean(train_losses['dice']), aggregate="mean", color="green")
+                # ptable.update('Loss CT', np.mean(train_losses['ct']), aggregate="mean", color="red")
 
                 iou_all = self.metrics(outputs, masks)
                 for c, iou in enumerate(iou_all):
@@ -187,18 +192,19 @@ class Trainer:
                 masks = masks.to(train_config['device'])
                 with torch.no_grad():
                     outputs, feat = self.model(images)
-                losses = self.get_losses(outputs, masks, feat, outputs, masks, feat, contrast=False)
-                torch.nn.CrossEntropyLoss()
+                # losses = self.get_losses(outputs, masks, feat, outputs, masks, feat, contrast=False)
+                # losses['PixelWiseLabel'] = torch.tensor([0], device = outputs.device) # TODO: remove
+
                 # metrics
                 iou_all = self.metrics(outputs, masks)
                 # log
-                val_losses['bce'].append(losses['CEFocalLoss'].item())
-                val_losses['dice'].append(losses['DiceLoss'].item())
-                val_losses['ct'].append(losses['PixelWiseLabel'].item())
+                # val_losses['bce'].append(losses['CEFocalLoss'].item())
+                # val_losses['dice'].append(losses['DiceLoss'].item())
+                # val_losses['ct'].append(losses['PixelWiseLabel'].item())
 
-                ptable.update('Val BCE', np.mean(val_losses['bce']), aggregate="mean", color="yellow")
-                ptable.update('Val Dice', np.mean(val_losses['dice']), aggregate="mean", color="cyan")
-                ptable.update('Val CT', np.mean(val_losses['ct']), aggregate="mean", color="green")
+                # ptable.update('Val BCE', np.mean(val_losses['bce']), aggregate="mean", color="yellow")
+                # ptable.update('Val Dice', np.mean(val_losses['dice']), aggregate="mean", color="cyan")
+                # ptable.update('Val CT', np.mean(val_losses['ct']), aggregate="mean", color="green")
 
                 for c, iou in enumerate(iou_all):
                     val_ious[self.class_names[c]].append(iou.item())
@@ -207,8 +213,8 @@ class Trainer:
                 iou_all_classes = np.mean([np.mean(v) for k, v in val_ious.items()])
                 ptable.update("Val IoU", iou_all_classes, aggregate="mean", color="blue")
             
-            self.writer.add_scalar("Val_Loss/BCE", np.mean(val_losses['bce']), epoch)
-            self.writer.add_scalar("Val_Loss/Dice", np.mean(val_losses['dice']), epoch)
+            # self.writer.add_scalar("Val_Loss/BCE", np.mean(val_losses['bce']), epoch)
+            # self.writer.add_scalar("Val_Loss/Dice", np.mean(val_losses['dice']), epoch)
             for c, iou in enumerate(iou_all):
                 val_ious[self.class_names[c]].append(iou.item())
                 self.writer.add_scalar(f"Val_IoU/{c}", np.mean(val_ious[self.class_names[c]]), epoch)

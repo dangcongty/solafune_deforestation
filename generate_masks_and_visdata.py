@@ -22,6 +22,7 @@ colors = {
     'plantation': (255, 255, 255),
 }
 pixel_count = {
+    'background': 0,
     'grassland_shrubland': 0,
     'logging': 0,
     'mining': 0,
@@ -37,21 +38,20 @@ for anno in tqdm(annotations['images']):
     rgb_image = np.nan_to_num(rgb_image, nan=0)
     rgb_image = cv2.normalize(rgb_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-    mask = np.zeros((h, w, 4)).astype(np.uint8)
+    mask = np.zeros((h, w, 5)).astype(np.uint8)
     bg_mask = np.zeros((h, w)).astype(np.uint8)
     for lb in labels:
         c = lb['class']
-        c_id = class_names.index(c)
+        c_id = class_names.index(c) + 1
         poly = np.array(lb['segmentation'], dtype = float).astype(np.int32)
         mask[:, :, c_id] = cv2.fillPoly(mask[:, :, c_id].copy(), [poly.reshape((-1, 1, 2))], (1))
         pixel_count[c] += mask[:, :, c_id].sum()
         bg_mask = cv2.fillPoly(bg_mask, [poly.reshape((-1, 1, 2))], (c_id+1))
         rgb_image = cv2.polylines(rgb_image, [poly.reshape((-1, 1, 2))], True, colors[c], 2)
     bg_mask = np.where(bg_mask!=0, 0, 1)
-    mask[:, :, -1] = bg_mask
-    # pixel_count['background'] += bg_mask.sum()
-    cv2.imwrite(f'{root}/vis/{file_name[:-4]}.jpg', rgb_image)
-    np.save(f'{root}/train_masks/{file_name[:-4]}.npy', mask)
+    pixel_count['background'] += bg_mask.sum()
+    # cv2.imwrite(f'{root}/vis/{file_name[:-4]}.jpg', rgb_image)
+    # np.save(f'{root}/train_masks/{file_name[:-4]}.npy', mask)
 
 total_pixels = sum(pixel_count.values())
 pixel_per_class = []
@@ -59,6 +59,7 @@ for c in pixel_count:
     pixel_per_class.append(pixel_count[c]/total_pixels)
 pixel_per_class = np.array(pixel_per_class)
 inverse = 1.0 / pixel_per_class
+inverse[0] = 0.1 # small coef learning background
 # weight_classes = inverse / np.sum(inverse)
 np.save('dataset/weight_classes.npy', inverse)
 

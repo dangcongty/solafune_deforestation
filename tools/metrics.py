@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from shapely.geometry import Polygon
+import torch.nn.functional as F
 
 
 def getIOU(polygon1: Polygon, polygon2: Polygon) -> float:
@@ -80,7 +81,7 @@ class F1_Metrics:
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         return f1, precision, recall
 
-def compute_iou(pred, gt, num_classes = 5, epsilon=1e-6):
+def compute_iou(pred, gt, num_classes = 5, threshold = 0.5, epsilon=1e-6):
     """
     Computes the Intersection over Union (IoU) metric for semantic segmentation.
     
@@ -88,11 +89,13 @@ def compute_iou(pred, gt, num_classes = 5, epsilon=1e-6):
         pred (torch.Tensor): Predicted segmentation, shape (Batchsize, num_classes, H, W).
         gt (torch.Tensor): Ground truth segmentation, shape (Batchsize, H, W).
         epsilon (float): Small value to avoid division by zero.
+        threshold: threshold for bg
         
     Returns:
-        torch.Tensor: IoU score for each class, shape (num_classes,).
+        torch.Tensor: IoU score for each class, shape (num_classes,). tensor([0.0869, 0.0721, 0.1962, 0.1404, 0.0406])
     """
     # Ensure predictions are binary or probabilities
+    pred[pred < threshold] = 0 
     pred = pred.argmax(1) 
 
     # Compute intersection and union for each class
@@ -108,6 +111,7 @@ def compute_iou(pred, gt, num_classes = 5, epsilon=1e-6):
     return ious
 
 if __name__ == "__main__":
-    a = torch.rand((2, 5, 10, 10))
-    b = torch.rand((2, 5, 10, 10))
-    compute_iou(a, b)
+    input = torch.rand((2, 5, 10, 10)).softmax(1)
+    target = torch.randint(0, 5, (2, 10, 10))
+    target = F.one_hot(target, 5).permute((0, -1, 1, 2))
+    compute_iou(input, target)

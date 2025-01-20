@@ -12,8 +12,8 @@ class Unet(nn.Module):
         super().__init__()
 
         self.model = smp.create_model(
-            arch='UnetPlusPlus',
-            encoder_name='tu-bat_resnext26ts',
+            arch='Unet',
+            encoder_name='tu-efficientnetv2_rw_t',
             encoder_weights='imagenet',
             in_channels=in_chan,
             classes=num_classes

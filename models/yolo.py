@@ -1,12 +1,16 @@
 
-import sys
 import os
+import sys
+
 sys.path.append(os.getcwd())
-from models.modules import *
 import torch
 import torch.nn as nn
 import yaml
+from torchinfo import summary
 from ultralytics.utils.ops import make_divisible
+
+from models.modules import *
+
 
 class YOLOSeg(nn.Module):
     def __init__(self, config_file = 'models/yolo_config.yaml', scale = 'n'):
@@ -62,9 +66,10 @@ class YOLOSeg(nn.Module):
             x = m(x)  # run
             y.append(x) 
 
-        return x[0], x[1:]
+        return x[0], x[1], x[-1]
 
 if __name__ == '__main__':
     model = YOLOSeg()
     x = torch.rand((1, 12, 1024, 1024))
-    y = model(x)
+    summary(model.cuda(), (2, 12, 1024, 1024))
+    # y = model(x)

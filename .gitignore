@@ -11,3 +11,9 @@ __pycache__/
 *.sh
 contrastive/
 outputs
+gpu_temperature_log.txt
+nvidia-bug-report.log.gz
+plot_temp.py
+predict_bk.py
+*.png
+train_bk.py

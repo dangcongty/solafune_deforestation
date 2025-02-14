@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import tifffile
 import torch
+import torch.nn.functional as F
 import yaml
 from rasterio import features
 from shapely.geometry import Polygon, shape
@@ -16,166 +17,110 @@ from tqdm import tqdm
 
 from models.unet_v2 import Unet
 from models.yolo import YOLOSeg
-from tools.metrics import F1_Metrics
-import torch.nn.functional as F
 
 
 class Inference:
     def __init__(self, config_file = 'config.yaml'):
+        
         with open(config_file, 'r') as f:
             self.config = yaml.safe_load(f)
 
         self.__init_model()
         self.__init_param()
 
+        self.class_names = ['background', "grassland_shrubland", "logging", "mining", "plantation"]
     def __init_model(self):
         model_config = self.config['Model']
         self.model = YOLOSeg(config_file = model_config['config_file'], scale = model_config['scale'])
         # self.model = Unet(in_chan=model_config['in_channels'], num_classes=model_config['num_classes'])
         self.model.load_state_dict(torch.load(self.config['Test']['model_weight'], map_location='cpu', weights_only=True))
         self.model.eval()
-
+        
     def __init_param(self):
         self.mean = np.load('dataset/mean.npy')
         self.std = np.load('dataset/std.npy')
 
-    def normalize(self, image):
-        image = np.transpose(image, (2, 0, 1)) # h w c => c h w
-        image = (image - self.mean)/self.std 
-        return image.astype(np.float32)
-    
-    def load_image(self, image_path):
-        image = tifffile.imread(image_path)
+
+    def load_and_split(self, img_path):
+        imgsz = self.config['Test']['imgsz']
+        overlap = self.config['Test']['overlap']
+        split_size = self.config['Test']['split_size']
+        name = os.path.basename(img_path)[:-4]
+        image = tifffile.imread(img_path)
         image = np.nan_to_num(image)
-        image = self.normalize(image)
-        return image
+        h, w = image.shape[:2]
 
-    def visualize_result(self):
-        device = self.config['Test']['device']
-        self.model.to(device)
-        for path in tqdm(glob('dataset/train_images/*')):
-            image = self.load_image(path)
-            image = torch.from_numpy(image).unsqueeze(0).to(device)
-            with torch.no_grad():
-                pred = self.model(image)[0][0].softmax(1).cpu()
-                pred[pred<0.5] = 0
-                pred = pred.argmax(1)
-                pred = F.interpolate(pred.unsqueeze(0).float(), scale_factor=2).squeeze().long().numpy()
-            np.save(f'outputs/train_set/{os.path.basename(path)[:-4]}.npy', pred)
+        mask = np.load(img_path.replace('train_images', 'train_masks')[:-4]+'.npy')
+        mask = mask.argmax(-1)
+        split_images = []
+        split_bgr = []
+        masks = []
+        for i in range(0, h-overlap, overlap):
+            for j in range(0, w-overlap, overlap):
+                split_img = image[i:i+split_size, j:j+split_size]
+                split_mask = mask[i:i+split_size, j:j+split_size]
 
-        colors = [(0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)]
-        for path in tqdm(glob(f'outputs/train_set/*.npy')):
-            name = os.path.basename(path)[:-4]
-            image = tifffile.imread(f'dataset/train_images/{name}.tif')
-            rgb_image = image[:, :, [1, 2, 3]]
-            rgb_image = np.nan_to_num(rgb_image, nan=0)
-            rgb_image = cv2.normalize(rgb_image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                masks.append(split_mask)
+                bgr_image = cv2.normalize(split_img.copy(), None, 0, 255, cv2.NORM_MINMAX)[:, :, 1:4].astype(np.uint8)
+                
+                split_img =  np.transpose(split_img, (2, 0, 1))
+                split_img = (split_img - self.mean)/self.std 
+                split_img = torch.from_numpy(split_img.copy())
+                split_img = F.interpolate(split_img.unsqueeze(0).float(), (imgsz, imgsz), mode='nearest')
+                split_images.append(split_img)
+                split_bgr.append(bgr_image)
+                
 
-            label_mask = cv2.imread(f'dataset/vis/{name}.jpg')
-
-            pred_mask = np.load(path)[0]
-            pred_mask = pred_mask.argmax(0)
-            pred_vis = rgb_image.copy()
-            for value, color in enumerate(colors):
-                pred_vis[pred_mask == value] = color
-            pred_vis = rgb_image.copy()*0.5 + pred_vis*0.5
-
-            combine = np.concatenate([label_mask*0.8, pred_vis], axis=1)
-            cv2.imwrite(f'outputs/visualize/{name}.jpg', combine)
-
-    def load_anno(self):
-        class_names = ["grassland_shrubland", "logging", "mining", "plantation", "background"]
-        with open("dataset/train_annotations.json", "r") as f:
-            raw_annotations = json.load(f)
-
-        truth_polygons: dict[str, dict[str, list[Polygon]]] = {}  # file_name -> class_name -> polygons
-        for fn in tqdm([f"train_{i}.tif" for i in range(176)]):
-            ann: dict[str, list[Polygon]] = {}  # class_name -> polygons
-            for class_name in class_names:
-                ann[class_name] = []
-
-            for tmp_img in raw_annotations["images"]:
-                if tmp_img["file_name"] == fn:
-                    for tmp_ann in tmp_img["annotations"]:
-                        poly = tmp_ann["segmentation"]
-                        # convert [x1, y1, x2, y2, ..., xn, yn] to [(x1, y1), (x2, y2), ..., (xn, yn)]
-                        new_poly = Polygon([(poly[i], poly[i + 1]) for i in range(0, len(poly), 2)]).buffer(0)
-                        ann[tmp_ann["class"]].append(new_poly)
-
-            truth_polygons[fn] = ann
-        return truth_polygons
-
-    def post_process(self, path):
-        test_config = self.config['Test']
-        class_names = ["background", "grassland_shrubland", "logging", "mining", "plantation"]
-        polygons_all_imgs = {}
-        for path in tqdm(glob(f'{path}/*.npy')):
-            polygons_all_classes = {}
-            pred_mask = np.load(path)
-            for i, class_name in enumerate(class_names):
-                label = measure.label(pred_mask[i] > test_config['threshold'], connectivity=2, background=0).astype(np.uint8)
-                polygons = []
-                for p, value in features.shapes(label, label):
-                    p = shape(p).buffer(0.5)
-                    if p.area >= test_config['min_area']:
-                        p = p.simplify(tolerance=0.5)
-                        polygons.append(p)
-                polygons_all_classes[class_name] = polygons
-            polygons_all_imgs[os.path.basename(path).replace(".npy", ".tif")] = polygons_all_classes
-        return polygons_all_imgs
+        return split_images, split_bgr, masks  
     
-    def get_metrics(self):
-        class_names = ["grassland_shrubland", "logging", "mining", "plantation", "background"]
-        val_pred_polygons = self.post_process(path = 'outputs/train_set')
-        truth_polygons = self.load_anno()
-        metric = F1_Metrics()
-        val_f1_scores = {}
+    def postprocess(self, mask, threshold):
+        for i, class_name in enumerate(self.class_names):
+            mask_class = (mask==i)*1
+            label = measure.label(mask_class, connectivity=2, background=0).astype(np.uint8)
 
-        for idx in range(176):
-            fn = f"train_{idx}.tif"
-            val_f1_scores[fn] = {}
-            for class_name in class_names:
-                pred_polys = val_pred_polygons[fn][class_name]
-                truth_polys = truth_polygons[fn][class_name]
-                f1_score, _, _ = metric.compute_f1(pred_polys, truth_polys)
-                val_f1_scores[fn][class_name] = f1_score
+        return
 
-        val_f1_df = pd.DataFrame(val_f1_scores).T
-
-        val_f1_avg = val_f1_df.mean().mean()  # average of all classes and all images
-        print(f"average f1 score: {val_f1_avg}")
-        print("f1 scores:")
-
-    def submission(self):
-        class_names = ["grassland_shrubland", "logging", "mining", "plantation", "background"]
+    def predict(self, data_path = 'dataset/train_images'):
         device = self.config['Test']['device']
+        threshold = self.config['Test']['threshold']
+        overlap = self.config['Test']['overlap']
+        split_size = self.config['Test']['split_size']
         self.model.to(device)
-        for path in tqdm(glob('dataset/evaluation_images/*')):
-            image = self.load_image(path)
-            image = torch.from_numpy(image).unsqueeze(0).to(device)
+
+        for img_path in tqdm(glob(f'{data_path}/*')):
+            conf_maps = []
+            pred_maps = []
+            split_images, split_bgr, masks = self.load_and_split(img_path)
             with torch.no_grad():
-                pred = self.model(image)[0][0].detach().softmax(1).cpu()
-                pred = F.interpolate(pred.float(), scale_factor=2).squeeze().numpy()
-            np.save(f'outputs/submit_set/{os.path.basename(path)[:-4]}.npy', pred)
+                for split_img, split_vis, mask in zip(split_images, split_bgr, masks):
+                    split_img = split_img.to(device)
+                    output = self.model(split_img)[0][0]
+                    output_conf = output.softmax(0)
+                    output_cls = output.argmax(0)
+                    max_confidence, predicted_classes  = torch.max(output_conf, dim = 0)
+                    conf_maps.append(output_conf)
+                    pred_maps.append(predicted_classes)
+                
+            result_map = torch.zeros((5, 1024, 1024)).to(device)
+            _, h, w = result_map.shape
+            for ci, i in enumerate(range(0, h-overlap, overlap)):
+                for cj, j in enumerate(range(0, w-overlap, overlap)):
+                    cmap = conf_maps[3*ci + cj]
+                    cmap = F.interpolate(cmap.unsqueeze(0).float(), (512, 512)).squeeze()
+                    result_map[:, i:i+split_size, j:j+split_size] = torch.maximum(result_map[:, i:i+split_size, j:j+split_size], cmap)
+            class_map = torch.argmax(result_map, 0).cpu().numpy().astype(np.uint8)
+            
+            self.postprocess(class_map, threshold)
 
-        test_pred_polygons = self.post_process(path = 'outputs/submit_set')
-        submission_save_path = "submission.json"
-        images = []
-        for img_id in range(118):  # evaluation_0.tif to evaluation_117.tif
-            annotations = []
-            for class_name in class_names:
-                for poly in test_pred_polygons[f"evaluation_{img_id}.tif"][class_name]:
-                    seg: list[float] = []  # [x0, y0, x1, y1, ..., xN, yN]
-                    for xy in poly.exterior.coords:
-                        seg.extend(xy)
+            # visualize
+            vis = np.stack([class_map, class_map, class_map], -1)
+            gt_path = f'dataset/vis/{os.path.basename(img_path)[:-4]}.jpg'
+            gt = cv2.imread(gt_path)
+            vis = np.concatenate([gt, np.zeros((vis.shape[0], 50, 3)), vis*50], 1)
+            cv2.imwrite(f'outputs/visualize/{os.path.basename(img_path)[:-4]}.jpg', vis)
+            
 
-                    annotations.append({"class": class_name, "segmentation": seg})
-
-            images.append({"file_name": f"evaluation_{img_id}.tif", "annotations": annotations})
-
-        with open(submission_save_path, "w", encoding="utf-8") as f:
-            json.dump({"images": images}, f, indent=4)
 
 if __name__ == '__main__':
-    inference = Inference(config_file='config.yaml')
-    inference.visualize_result()
+    infer = Inference()
+    infer.predict()

@@ -830,12 +830,13 @@ class Segment(nn.Module):
         self.aux5_4 = SegmentHead(ch[4], 128, n_classes, up_factor=32)
 
     def forward(self, x):
+        feats = x
         logits = self.head(x[0])
         logits_aux2 = self.aux2(x[1])
         logits_aux3 = self.aux3(x[2])
         logits_aux4 = self.aux4(x[3])
         logits_aux5_4 = self.aux5_4(x[4])
-        return logits, logits_aux2, logits_aux3, logits_aux4, logits_aux5_4
+        return logits, (logits_aux2, logits_aux3, logits_aux4, logits_aux5_4), feats
     
 
 

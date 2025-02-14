@@ -88,64 +88,84 @@ class DiceLoss(nn.Module):
         return dice_loss.mean()
 
 class PixelWiseLabel(nn.Module):
-    def __init__(self, margin = 1, feature_size = 64):
+    def __init__(self):
         super().__init__()
-        self.margin = margin
-        self.feature_size = feature_size
 
-    def get_simloss(self, o1, o2, t1, t2):
-        cosine_sim = F.cosine_similarity(o1.unsqueeze(2), o2.unsqueeze(1), dim=0)  # Shape: (H*W, H*W)
-        t_equal = (t1.unsqueeze(1) == t2.unsqueeze(0)).float()  # Shape: (H*W, H*W)
-        t_unequal = 1 - t_equal
-        cosine_sim = (cosine_sim + 1)/2 # shift & scale [-1, 1] => [0, 1]
-        pos_loss = -torch.log(cosine_sim + 1e-8) * t_equal
-        pos_loss = pos_loss.sum()/t_equal.sum() # mean
-        neg_loss = -torch.log((1+1e-6)-cosine_sim + 1e-8) * t_unequal # 1+1e-6 for numerically
-        neg_loss = neg_loss.sum()/t_unequal.sum() # mean
-        total_loss = (pos_loss + neg_loss)/2
-        return total_loss
+    def cosine_similarity(self, f1, f2):
+        dot_product = torch.matmul(f1, f2.T)
+        norms1 = torch.norm(f1, dim=1, keepdim=True)  # Keepdim=True for broadcasting
+        norms2 = torch.norm(f2, dim=1, keepdim=True)
+        norm_matrix = norms1 * norms2.T  # Equivalent to outer product
+        cosine_sim = dot_product / (norm_matrix + 1e-8)
+        return  cosine_sim.mean()
 
-    def forward(self, features1: torch.Tensor, targets1:torch.Tensor, features2: torch.Tensor, targets2:torch.Tensor, contrast = True):
+    def forward(self, features: torch.Tensor, targets:torch.Tensor):
         '''
         input:
-            feature: predict mask shape B x C x H x W 
-            targets: target mask shape B x H x W 
+            feature: predict mask shape B x 32 x 256 x 256 
+            targets: target mask shape B x 1024 x 1024
         '''
+        losses = []
+        ignore = -1
+        H, W = features.shape[2:]
+        targets = F.interpolate(targets.unsqueeze(1).float(), (H, W), mode='nearest').squeeze(1)
+        # 1 images - multiple classes
+        for b1 in range(targets.shape[0]):
+            ignore += 1
+            for b2 in range(ignore, targets.shape[0]):
+                for c in range(5):
+                    if b1 == b2:
+                        # pixel level
+                        t = (targets[b1] == c)*1
+                        mask = torch.nonzero(t.flatten(), as_tuple=False).squeeze(1)
+                        if not len(mask):
+                            continue
+                        # t_mask = t.flatten()[mask]
+                        f = features[b1].flatten(1, 2)
+                        f_mask = f[:, mask].permute((1, 0))
 
-        # Resize feature map and GT mask
-        features1 = F.interpolate(features1, size = (self.feature_size, self.feature_size), mode='bilinear', align_corners=False)
-        targets1 = F.interpolate(targets1.float().unsqueeze(1), size = (self.feature_size, self.feature_size), mode='nearest').squeeze(1)
-        if contrast:
-            targets2 = F.interpolate(targets2.float().unsqueeze(1), size = (self.feature_size, self.feature_size), mode='nearest').squeeze(1)
-            features2 = F.interpolate(features2, size = (self.feature_size, self.feature_size), mode='bilinear', align_corners=False)
+                        cosine_score = []
+                        bsize = 2048
+                        for idx1 in range(0, len(f_mask), bsize):
+                            fbatch1 = f_mask[idx1: idx1+bsize]
+                            for idx2 in range(0, len(f_mask), bsize):
+                                fbatch2 = f_mask[idx2: idx2+bsize]
+                                sim = self.cosine_similarity(fbatch1, fbatch2)
+                                cosine_score.append(sim)
+                        cosine_score = torch.stack(cosine_score).mean()
+                        cosine_score = (cosine_score+1)/2 # shift & scale
+                        loss = -torch.log(cosine_score + 1e-4)
 
-        N, H, W = targets1.shape 
-        N, C, H, W  = features1.shape
+                    else:
+                        # cross image level
+                        t1 = (targets[b1] == c)*1
+                        mask1 = torch.nonzero(t1.flatten(), as_tuple=False).squeeze(1)
+                        if not len(mask1):
+                            continue
+                        f1 = features[b1].flatten(1, 2)
+                        f1_mask = f1[:, mask1].permute((1, 0))
 
-        loss_batches = []
-        t1_flat = targets1.view(N, -1)  # Shape: (N, H*W)
-        o1_flat = features1.view(N, C, -1)  # Shape: (N, C, H*W)
-        if contrast:
-            t2_flat = targets2.view(N, -1)  # Shape: (N, H*W)
-            o2_flat = features2.view(N, C, -1)  # Shape: (N, C, H*W)
+                        t2 = (targets[b2] == c)*1
+                        mask2 = torch.nonzero(t2.flatten(), as_tuple=False).squeeze(1)
+                        f2 = features[b2].flatten(1, 2)
+                        f2_mask = f2[:, mask2].permute((1, 0))
+                        if not len(mask2):
+                            continue
+                        cosine_score = []
+                        bsize = 2048
+                        for idx1 in range(0, len(f1_mask), bsize):
+                            fbatch1 = f1_mask[idx1: idx1+bsize]
+                            for idx2 in range(0, len(f2_mask), bsize):
+                                fbatch2 = f2_mask[idx2: idx2+bsize]
+                                sim = self.cosine_similarity(fbatch1, fbatch2)
+                                cosine_score.append(sim)
+                        cosine_score = torch.stack(cosine_score).mean()
+                        cosine_score = (cosine_score+1)/2
+                        loss = -torch.log(cosine_score + 1e-4)
 
-        for batch in range(N):
-            t1 = t1_flat[batch]  # Shape: (H*W,)
-            o1 = o1_flat[batch]  # Shape: (C, H*W)
-            if contrast:
-                t2 = t2_flat[batch]  # Shape: (H*W,)
-                o2 = o2_flat[batch]  # Shape: (C, H*W)
+                    losses.append(loss)
 
-            loss_within_image1 = self.get_simloss(o1, o1, t1, t1)
-            if contrast:
-                loss_within_image2 = self.get_simloss(o2, o2, t2, t2)
-                loss_cross_image = self.get_simloss(o1, o2, t1, t2)
-                total_loss = (loss_within_image1 + loss_within_image2 + loss_cross_image)/3
-            else:
-                total_loss = loss_within_image1
-            loss_batches.append(total_loss)
-
-        return torch.stack(loss_batches).mean()
+        return torch.stack(losses).mean()
 
 class OhemCELoss(nn.Module):
     def __init__(self, thresh, device = 'cuda:1', lb_ignore=255):
@@ -157,7 +177,7 @@ class OhemCELoss(nn.Module):
 
     def forward(self, logits, labels):
         n_min = labels[labels != self.lb_ignore].numel() // 16
-        loss = self.criteria(logits, labels).view(-1)
+        loss = self.criteria(logits, labels.to(torch.long)).view(-1)
         loss_hard = loss[loss > self.thresh]
         if loss_hard.numel() < n_min:
             loss_hard, _ = loss.topk(n_min)
@@ -165,6 +185,7 @@ class OhemCELoss(nn.Module):
 
 if __name__ == '__main__':
     loss = PixelWiseLabel()
-    outputs = torch.load('out.pt', weights_only=True)
-    targets = torch.load('gt.pt', weights_only=True)
-    loss(outputs, targets)
+    outputs = torch.rand((4, 128, 128, 128)).cuda()
+    outputs[0] -= 0.5
+    targets = torch.randint(0, 5, (4, 128, 128)).cuda()
+    loss(outputs, targets, outputs, targets)

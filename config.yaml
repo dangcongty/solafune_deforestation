@@ -6,13 +6,13 @@ Model:
   scale: 'n'
 
 Loader:
-  train_bs: 4
-  val_bs: 4
+  train_bs: 8
+  val_bs: 8
   down: [2, 4, 8, 16, 32]
 
 Optimizer:
   type: 'Adam'
-  lr: 0.0001
+  lr: 0.001
 
 Losses:
   type: ['focal', 'dice']
@@ -26,7 +26,10 @@ Train:
   ct_gain: 10
 
 Test:
-  model_weight: 'ckpt/v1/best.pth'
-  device: 'cuda:1'
+  model_weight: 'ckpt/v2/best.pth'
+  device: 'cuda:0'
   threshold: 0.5
   min_area: 10000
+  split_size: 512
+  overlap: 256
+  imgsz: 1024

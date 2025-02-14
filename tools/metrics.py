@@ -1,7 +1,7 @@
 import numpy as np
 import torch
-from shapely.geometry import Polygon
 import torch.nn.functional as F
+from shapely.geometry import Polygon
 
 
 def getIOU(polygon1: Polygon, polygon2: Polygon) -> float:
@@ -24,62 +24,6 @@ def getIOU(polygon1: Polygon, polygon2: Polygon) -> float:
         return 0
     return intersection / union
 
-class F1_Metrics:
-    def __init__(self) -> None:
-        """
-        A class used to compute F1 metrics for polygon-based segmentation.
-        Methods
-        -------
-        compute_f1(gt_polygons: list, pred_polygons: list, iou_threshold=0.5)
-            Computes the F1 score between ground truth and predicted polygons.
-        """
-        pass
-    def compute_f1(self, gt_polygons: list, pred_polygons: list, iou_threshold=0.5) -> tuple:
-        """
-        Compute the F1 score, precision, and recall for the given ground truth and predicted polygons.
-    
-        Args:
-            gt_polygons (list): List of ground truth polygons.
-            pred_polygons (list): List of predicted polygons.
-            iou_threshold (float, optional): Intersection over Union (IoU) threshold to consider a match. Defaults to 0.5.
-    
-        Returns:
-            tuple: A tuple containing the F1 score, precision, and recall.
-        """
-        matched_instances = {}
-        gt_matched = np.zeros(len(gt_polygons))
-        pred_matched = np.zeros(len(pred_polygons))
-
-        gt_matched = np.zeros(len(gt_polygons))
-        pred_matched = np.zeros(len(pred_polygons))
-        for gt_idx, gt_polygon in enumerate(gt_polygons):
-            best_iou = iou_threshold
-            best_pred_idx = None
-            for pred_idx, pred_polygon in enumerate(pred_polygons):
-                # if gt_matched[gt_idx] == 1 or pred_matched[pred_idx] == 1:
-                #     continue
-                
-                iou = getIOU(gt_polygon, pred_polygon)
-                if iou == 0:
-                    continue
-                
-                if iou > best_iou:
-                    best_iou = iou
-                    best_pred_idx = pred_idx
-            if best_pred_idx is not None:
-                matched_instances[(gt_idx, best_pred_idx)] = best_iou
-                gt_matched[gt_idx] = 1
-                pred_matched[best_pred_idx] = 1
-
-        # F1, Precision, Recall
-        
-        tp = len(matched_instances)
-        fp = len(pred_polygons) - tp
-        fn = len(gt_polygons) - tp
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-        return f1, precision, recall
 
 def compute_iou(pred, gt, num_classes = 5, threshold = 0.5, epsilon=1e-6):
     """
@@ -107,8 +51,17 @@ def compute_iou(pred, gt, num_classes = 5, threshold = 0.5, epsilon=1e-6):
         union = torch.sum(pred_i + gt_i, dim=(1, 2)) - intersection  
         iou = intersection / (union + epsilon)  
         ious.append(iou)
-    ious = torch.stack(ious).mean(1)
-    return ious
+    
+    # Trường hợp sample ko có class nhưng vẫn tính mean => IoU thấp
+    ious = torch.stack(ious)
+    mask = torch.ones_like(ious)
+    for b in range(gt.shape[0]):
+        indice = torch.argwhere(torch.bincount(gt[b].flatten())==0).flatten()
+        mask[indice, b] = 0 # mask những class ko xuất hiện trong sample
+    # mask shape: 5x8 ---- 5 classes and batchsize 8
+    
+    ious = ious.sum(1)/(mask.sum(1) +1e-10) # tính trung bình iou của từng class trên tất cả batch
+    return ious, mask.sum(1)
 
 if __name__ == "__main__":
     input = torch.rand((2, 5, 10, 10)).softmax(1)

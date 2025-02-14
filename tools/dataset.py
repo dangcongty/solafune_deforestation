@@ -1,19 +1,20 @@
 import os
-from glob import glob
 import random
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from glob import glob
 
 import numpy as np
 import tifffile
 import torch
-from torch.utils.data import Dataset
-from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
-
 import torch.nn.functional as F
 import yaml
-import sys
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
 sys.path.append(os.getcwd())
 from tools import Augmentation
+
 
 def set_seed(seed=3107):
     np.random.seed(seed)
@@ -32,20 +33,9 @@ class Data(Dataset):
         self.std = np.load('dataset/std.npy')
 
         if mode == 'train':
-            self.paths = open('dataset/kfold/train_0.txt', 'r').readlines()
-            # self.images = np.load('dataset/images_train.npy')
-            # self.masks = np.load('dataset/masks_train.npy')
+            self.paths = open('dataset/data_split256_overlap128/train_split256_overlap128.txt', 'r').readlines()
         elif mode == 'val':
-            self.paths = open('dataset/kfold/val_0.txt', 'r').readlines()
-            # self.images = np.load('dataset/images_val.npy')
-            # self.masks = np.load('dataset/masks_val.npy')
-
-        with ProcessPoolExecutor(max_workers=16) as executor:
-            results = list(executor.map(self.load_data, self.paths))    
-
-        self.images, self.masks = zip(*results)
-        self.images = np.stack(self.images)
-        self.masks = np.stack(self.masks)
+            self.paths = open('dataset/data_split256_overlap128/val_split256_overlap128.txt', 'r').readlines()
 
         self.config = config
         self.down = self.config['Loader']['down']
@@ -53,9 +43,6 @@ class Data(Dataset):
         self.augs = Augmentation()
         self.mode = mode
 
-    def load_data(self, path):
-        mask_path = f'dataset/train_masks/{os.path.basename(path)[:-4]}npy'
-        return self.load_image(path), np.load(mask_path).transpose((2, 0, 1))
     
     def normalize(self, image):
         image = np.transpose(image, (2, 0, 1)) # h w c => c h w
@@ -89,30 +76,36 @@ class Data(Dataset):
         np.save('dataset/mean.npy', mean)
         np.save('dataset/std.npy', std)
 
-    def load_image(self, image_path):
-        image_path = image_path.strip()
-        image = tifffile.imread(image_path)
-        image = np.nan_to_num(image)
-        image = self.normalize(image)
-        return image
-
     def __len__(self):
         return len(self.paths)
 
     def __getitem__(self, index):
-        image = self.images[index]
+        img_path = self.paths[index].strip()
+        mask_path = img_path.replace('train_images', 'train_masks')
+
+        image = np.load(img_path)
+        image = self.normalize(image)
+        mask = np.load(mask_path)
+
         h, w = image.shape[1:]
-        mask = self.masks[index]
-        mask = mask.argmax(0) 
+        mask = mask.argmax(-1) 
 
         if self.mode == 'train':
-            image, mask = self.augs.flip_lr(image, mask, 0.5)
-            image, mask = self.augs.flip_ud(image, mask, 0.5)
-            image, mask = self.augs.rotate(image, mask, 45, 0.5)
-            image, mask = self.augs.translate(image, mask, 25, 0.5)
+            try:
+                image, mask = self.augs.flip_lr(image, mask, 0.5)
+                image, mask = self.augs.flip_ud(image, mask, 0.5)
+                image, mask = self.augs.rotate(image, mask, 45, 0.5)
+                image, mask = self.augs.translate(image, mask, 25, 0.5)
+            except Exception as e:
+                print(e)
 
-        mask = torch.from_numpy(mask)
-        image = torch.from_numpy(image)
+        mask = torch.from_numpy(mask.copy())
+        image = torch.from_numpy(image.copy())
+
+        # resize 1024x1024
+        mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0).float(), (1024, 1024), mode='nearest').squeeze().to(torch.long)
+        image = F.interpolate(image.unsqueeze(0).float(), (1024, 1024), mode='nearest').squeeze()
+
         return image, mask
 
 if __name__ == '__main__':

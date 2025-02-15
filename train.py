@@ -142,7 +142,6 @@ class Trainer:
                 best_iou = mean_iou
                 self._save_checkpoint(epoch)
 
-            ptable.next_row(split=1)
 
     def _reset_logs(self):
         """Resets loss and IoU logs for each epoch."""

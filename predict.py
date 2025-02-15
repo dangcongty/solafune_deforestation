@@ -41,7 +41,7 @@ class Inference:
         self.std = np.load('dataset/std.npy')
 
 
-    def load_and_split(self, img_path):
+    def load_and_split(self, img_path, trainset = False):
         imgsz = self.config['Test']['imgsz']
         overlap = self.config['Test']['overlap']
         split_size = self.config['Test']['split_size']
@@ -50,17 +50,20 @@ class Inference:
         image = np.nan_to_num(image)
         h, w = image.shape[:2]
 
-        mask = np.load(img_path.replace('train_images', 'train_masks')[:-4]+'.npy')
-        mask = mask.argmax(-1)
+        if trainset:
+            mask = np.load(img_path.replace('train_images', 'train_masks')[:-4]+'.npy')
+            mask = mask.argmax(-1)
+            masks = []
+
         split_images = []
         split_bgr = []
-        masks = []
         for i in range(0, h-overlap, overlap):
             for j in range(0, w-overlap, overlap):
                 split_img = image[i:i+split_size, j:j+split_size]
-                split_mask = mask[i:i+split_size, j:j+split_size]
 
-                masks.append(split_mask)
+                if trainset:
+                    split_mask = mask[i:i+split_size, j:j+split_size]
+                    masks.append(split_mask)
                 bgr_image = cv2.normalize(split_img.copy(), None, 0, 255, cv2.NORM_MINMAX)[:, :, 1:4].astype(np.uint8)
                 
                 split_img =  np.transpose(split_img, (2, 0, 1))
@@ -70,24 +73,36 @@ class Inference:
                 split_images.append(split_img)
                 split_bgr.append(bgr_image)
                 
-
-        return split_images, split_bgr, masks  
+        if trainset:
+            return split_images, split_bgr, masks  
+        else:
+            return split_images, split_bgr, split_bgr
     
-    def postprocess(self, mask, threshold):
+    def postprocess(self, mask, min_area = 5000):
+        polygons_all_classes = {}
         for i, class_name in enumerate(self.class_names):
             mask_class = (mask==i)*1
-            label = measure.label(mask_class, connectivity=2, background=0).astype(np.uint8)
+            label = measure.label(mask_class, connectivity=1, background=0).astype(np.uint8)
+            polygons = []
+            for p, value in features.shapes(label, label):
+                p = shape(p).buffer(0.5)
+                if p.area >= min_area:
+                    p = p.simplify(tolerance=0.5)
+                    polygons.append(p)
+            polygons_all_classes[class_name] = polygons
+        return polygons_all_classes
 
-        return
-
-    def predict(self, data_path = 'dataset/train_images'):
+    def predict(self, data_path = 'dataset/evaluation_images'):
         device = self.config['Test']['device']
         threshold = self.config['Test']['threshold']
         overlap = self.config['Test']['overlap']
         split_size = self.config['Test']['split_size']
         self.model.to(device)
-
+        polygons = {}
+        images = []
+        submission_save_path = "submission.json"
         for img_path in tqdm(glob(f'{data_path}/*')):
+            annotations = []
             conf_maps = []
             pred_maps = []
             split_images, split_bgr, masks = self.load_and_split(img_path)
@@ -110,16 +125,31 @@ class Inference:
                     result_map[:, i:i+split_size, j:j+split_size] = torch.maximum(result_map[:, i:i+split_size, j:j+split_size], cmap)
             class_map = torch.argmax(result_map, 0).cpu().numpy().astype(np.uint8)
             
-            self.postprocess(class_map, threshold)
+            polygon = self.postprocess(class_map, threshold)
+            for c in self.class_names:
+                for poly in polygon[c]:
+                    seg = [] 
+                    for xy in poly.exterior.coords:
+                        seg.extend(xy)
+                    annotations.append({"class": c, "segmentation": seg})
+
+            images.append({"file_name": f"{os.path.basename(img_path)}", "annotations": annotations})
+
 
             # visualize
-            vis = np.stack([class_map, class_map, class_map], -1)
-            gt_path = f'dataset/vis/{os.path.basename(img_path)[:-4]}.jpg'
-            gt = cv2.imread(gt_path)
-            vis = np.concatenate([gt, np.zeros((vis.shape[0], 50, 3)), vis*50], 1)
-            cv2.imwrite(f'outputs/visualize/{os.path.basename(img_path)[:-4]}.jpg', vis)
-            
+            vis_pred = np.stack([class_map, class_map, class_map], -1)
+            vis_img = tifffile.imread(img_path)
+            vis_img = vis_img[:, :, [1, 2, 3]]
+            vis_img = np.nan_to_num(vis_img, nan=0)
+            vis_img = cv2.normalize(vis_img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
+            # gt_path = f'dataset/vis/{os.path.basename(img_path)[:-4]}.jpg'
+            # gt = cv2.imread(gt_path)
+            # vis = np.concatenate([gt, np.zeros((vis.shape[0], 50, 3)), vis*50], 1)
+            cv2.imwrite(f'outputs/visualize/{os.path.basename(img_path)[:-4]}.jpg', vis_pred *50+vis_img*0.8)
+            
+        with open(submission_save_path, "w", encoding="utf-8") as f:
+            json.dump({"images": images}, f, indent=4)
 
 if __name__ == '__main__':
     infer = Inference()

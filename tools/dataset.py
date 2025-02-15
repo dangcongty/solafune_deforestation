@@ -33,9 +33,9 @@ class Data(Dataset):
         self.std = np.load('dataset/std.npy')
 
         if mode == 'train':
-            self.paths = open('dataset/data_split256_overlap128/train_split256_overlap128.txt', 'r').readlines()
+            self.paths = open('dataset/data_split256_overlap128/logging_train.txt', 'r').readlines()
         elif mode == 'val':
-            self.paths = open('dataset/data_split256_overlap128/val_split256_overlap128.txt', 'r').readlines()
+            self.paths = open('dataset/data_split256_overlap128/logging_val.txt', 'r').readlines()
 
         self.config = config
         self.down = self.config['Loader']['down']
@@ -85,17 +85,18 @@ class Data(Dataset):
 
         image = np.load(img_path)
         image = self.normalize(image)
-        mask = np.load(mask_path)
+        image = np.stack([image[3], image[4], image[7], image[10], image[11]], 0)
 
+        mask = np.load(mask_path)
+        mask = mask[:, :, 2] # 2: logging
         h, w = image.shape[1:]
-        mask = mask.argmax(-1) 
 
         if self.mode == 'train':
             try:
                 image, mask = self.augs.flip_lr(image, mask, 0.5)
                 image, mask = self.augs.flip_ud(image, mask, 0.5)
-                image, mask = self.augs.rotate(image, mask, 45, 0.5)
-                image, mask = self.augs.translate(image, mask, 25, 0.5)
+                image, mask = self.augs.rotate(image, mask, 90, 0.5)
+                image, mask = self.augs.translate(image, mask, 5, 0.5)
             except Exception as e:
                 print(e)
 

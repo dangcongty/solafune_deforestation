@@ -10,6 +10,7 @@ import yaml
 from progress_table import ProgressTable
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 from base import set_seed
 from models.yolo import YOLOSeg
@@ -51,7 +52,8 @@ class Trainer:
         self.save_model_dir = self._init_workspace()
 
         # Class names
-        self.class_names = ['background', "grassland_shrubland", "logging", "mining", "plantation"]
+        # self.class_names = ['background', "grassland_shrubland", "logging", "mining", "plantation"]
+        self.class_names = ['background', "logging"]
 
     def _create_dataloader(self, mode, batch_size):
         """Creates a DataLoader for the given mode (train/val)."""
@@ -68,6 +70,8 @@ class Trainer:
 
         shutil.copyfile('config.yaml', f'{save_dir}/config.yaml')
         shutil.copyfile('train.py', f'{save_dir}/train.py')
+        shutil.copytree('tools', f'{save_dir}/tools')
+        shutil.copytree('models', f'{save_dir}/models')
 
         self.writer = SummaryWriter(log_dir=f'{save_dir}/log')
         return save_dir
@@ -76,13 +80,12 @@ class Trainer:
         """Computes IoU and stores results."""
         outputs = outputs.softmax(1)
         ious, iou_mask = compute_iou(outputs, masks, threshold=0.5)
-        for k in range(1, 5):
-            if iou_mask[k] != 0:
-                iou_value = ious[k].item()
-                if stage == 'train':
-                    self.train_ious[k].append(iou_value)
-                else:
-                    self.val_ious[k].append(iou_value)
+        # if iou_mask[1] != 0:
+        iou_value = ious[1].item()
+        if stage == 'train':
+            self.train_ious[1].append(iou_value)
+        else:
+            self.val_ious[1].append(iou_value)
 
     def train(self):
         """Trains the YOLO segmentation model."""
@@ -97,9 +100,8 @@ class Trainer:
 
             # Training Phase
             self.model.train()
-            ptable.update('Epoch                            ', f'Train {epoch}/{epochs}', color="green")
-
-            for images, masks in ptable(self.train_loader, total=len(self.train_loader), description="Training phase"):
+            pbar = tqdm(self.train_loader, total=len(self.train_loader), desc=f"Training phase: {epoch}", bar_format='{l_bar}{bar:10}{r_bar}')
+            for images, masks in pbar:
                 images, masks = images.to(train_config['device']), masks.to(train_config['device'])
 
                 with amp.autocast(device_type=train_config['device'], dtype=torch.float16):
@@ -120,11 +122,8 @@ class Trainer:
 
             # Validation Phase
             self.model.eval()
-            ptable.next_row(split=1)
-            ptable.update('Epoch                            ', f'Val {epoch}/{epochs}', color="green")
-
             with torch.no_grad():
-                for images, masks in ptable(self.val_loader, total=len(self.val_loader), description="Evaluation phase"):
+                for images, masks in tqdm(self.val_loader, total=len(self.val_loader), desc=f"Evaluation phase: {epoch}", bar_format='{l_bar}{bar:10}{r_bar}'):
                     images, masks = images.to(train_config['device']), masks.to(train_config['device'])
                     logits, logits_aux, _ = self.model(images)
 
@@ -138,7 +137,7 @@ class Trainer:
             self._log_tensorboard(epoch, stage="val")
 
             # Save Best Model
-            mean_iou = np.mean([self.val_ious[k].avg() for k in range(1, 5)])
+            mean_iou = self.val_ious[1].avg()
             if mean_iou > best_iou:
                 best_iou = mean_iou
                 self._save_checkpoint(epoch)
@@ -170,10 +169,9 @@ class Trainer:
 
         # Log IoU per class
         mean_iou = 0
-        for k in range(1, 5):  # Exclude background class (index 0)
-            class_iou = ious[k].avg()
-            mean_iou += class_iou
-            self.writer.add_scalar(f'{stage.capitalize()}/IoU_{self.class_names[k]}', class_iou, epoch)
+        class_iou = ious[1].avg()
+        mean_iou += class_iou
+        self.writer.add_scalar(f'{stage.capitalize()}/IoU_{self.class_names[1]}', class_iou, epoch)
 
         # Log total mean IoU (excluding background)
         self.writer.add_scalar(f'{stage.capitalize()}/IoU_total', mean_iou / 4, epoch)

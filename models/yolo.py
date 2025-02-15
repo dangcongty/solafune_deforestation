@@ -19,7 +19,7 @@ class YOLOSeg(nn.Module):
             model_config = yaml.load(f, Loader=yaml.SafeLoader)
 
         depth, width, max_channels = model_config['scales'][scale]
-        ch = [12]
+        ch = [5]
         layers = []
         for idx, cfg in enumerate(model_config['backbone'] + model_config['head']):
             f, r, m, args = cfg

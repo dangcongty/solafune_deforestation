@@ -9,7 +9,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     """Pad to 'same' shape outputs."""
     if d > 1:
@@ -822,8 +821,8 @@ class Segment(nn.Module):
         c4 = max(ch[0] // 4, self.nm)
         # self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, 5, 1)) for x in ch)
         self.ch = ch
-        n_classes = 5
-        self.head = SegmentHead(ch[0], 128, 5, 2, aux=False)
+        n_classes = 2
+        self.head = SegmentHead(ch[0], 128, n_classes, 2, aux=False)
         self.aux2 = SegmentHead(ch[1], 128, n_classes, up_factor=4)
         self.aux3 = SegmentHead(ch[2], 128, n_classes, up_factor=8)
         self.aux4 = SegmentHead(ch[3], 128, n_classes, up_factor=16)

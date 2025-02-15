@@ -1,6 +1,6 @@
 Model:
   in_channels: 12
-  num_classes: 5
+  num_classes: 2
   model_type: 'YOLO'
   config_file: 'models/yolo_config.yaml'
   scale: 'n'

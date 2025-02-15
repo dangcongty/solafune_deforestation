@@ -25,7 +25,7 @@ def getIOU(polygon1: Polygon, polygon2: Polygon) -> float:
     return intersection / union
 
 
-def compute_iou(pred, gt, num_classes = 5, threshold = 0.5, epsilon=1e-6):
+def compute_iou(pred, gt, num_classes = 2, threshold = 0.5, epsilon=1e-6):
     """
     Computes the Intersection over Union (IoU) metric for semantic segmentation.
     

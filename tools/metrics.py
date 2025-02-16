@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -51,7 +52,7 @@ def compute_iou(pred, gt, num_classes = 2, threshold = 0.5, epsilon=1e-6):
         union = torch.sum(pred_i + gt_i, dim=(1, 2)) - intersection  
         iou = intersection / (union + epsilon)  
         ious.append(iou)
-    
+
     # Trường hợp sample ko có class nhưng vẫn tính mean => IoU thấp
     ious = torch.stack(ious)
     mask = torch.ones_like(ious)

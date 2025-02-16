@@ -1,6 +1,7 @@
 import os
 import random
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from glob import glob
 
@@ -82,11 +83,11 @@ class Data(Dataset):
     def __getitem__(self, index):
         img_path = self.paths[index].strip()
         mask_path = img_path.replace('train_images', 'train_masks')
-
+        t1 = time.time()
         image = np.load(img_path)
         image = self.normalize(image)
         image = np.stack([image[3], image[4], image[7], image[10], image[11]], 0)
-
+        t2 = time.time()
         mask = np.load(mask_path)
         mask = mask[:, :, 2] # 2: logging
         h, w = image.shape[1:]
@@ -95,18 +96,19 @@ class Data(Dataset):
             try:
                 image, mask = self.augs.flip_lr(image, mask, 0.5)
                 image, mask = self.augs.flip_ud(image, mask, 0.5)
-                image, mask = self.augs.rotate(image, mask, 90, 0.5)
-                image, mask = self.augs.translate(image, mask, 5, 0.5)
+                # image, mask = self.augs.rotate(image, mask, 90, 0.5)
+                # image, mask = self.augs.translate(image, mask, 5, 0.5)
             except Exception as e:
                 print(e)
-
+        t3 = time.time()
         mask = torch.from_numpy(mask.copy())
         image = torch.from_numpy(image.copy())
-
+        t4 = time.time()
         # resize 1024x1024
         mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0).float(), (1024, 1024), mode='nearest').squeeze().to(torch.long)
         image = F.interpolate(image.unsqueeze(0).float(), (1024, 1024), mode='nearest').squeeze()
-
+        t5 = time.time()
+        # print(f'image: {t2-t1:.4f} aug: {t3-t2:.4f} toTorch: {t4-t3:.4f} upscale: {t5-t4:.4f}')
         return image, mask
 
 if __name__ == '__main__':

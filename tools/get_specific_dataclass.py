@@ -6,12 +6,14 @@ from sklearn.model_selection import train_test_split
 
 class_names = ['background', "grassland_shrubland", "logging", "mining", "plantation"]
 
-query_class = 'logging'
-data_paths = []
+
+
 mask_paths = glob('dataset/data_split256_overlap128/train_masks_split256_overlap128/*')
 img_paths = [f'dataset/data_split256_overlap128/train_images_split256_overlap128/{os.path.basename(path)}' for path in mask_paths if 'json' not in path]
 
 for query_class in class_names:
+    data_paths = []
+    query_class = 'logging'
     if query_class == 'background':
         continue
     for mask_path in mask_paths:

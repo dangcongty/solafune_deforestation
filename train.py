@@ -1,7 +1,9 @@
 import os
 import shutil
+import time
 from collections import defaultdict
 
+import cv2
 import numpy as np
 import torch
 import torch.amp as amp
@@ -101,23 +103,34 @@ class Trainer:
             # Training Phase
             self.model.train()
             pbar = tqdm(self.train_loader, total=len(self.train_loader), desc=f"Training phase: {epoch}", bar_format='{l_bar}{bar:10}{r_bar}')
-            for images, masks in pbar:
+            for z, (images, masks) in enumerate(pbar):
                 images, masks = images.to(train_config['device']), masks.to(train_config['device'])
-
+                t2 = time.time()
                 with amp.autocast(device_type=train_config['device'], dtype=torch.float16):
                     logits, logits_aux, _ = self.model(images)
                     loss_pre = self.criteria_pre(logits, masks)
                     loss_aux = sum(crit(lgt, masks) for crit, lgt in zip(self.criteria_aux, logits_aux))
                     loss = (loss_pre + loss_aux) / 5
-
+                t3 = time.time()
                 self.optimizer.zero_grad()
                 scaler.scale(loss).backward()
                 scaler.step(self.optimizer)
                 scaler.update()
-
+                t4 = time.time()
                 self._log_losses(loss, loss_pre, loss_aux, stage="train")
                 self.find_iou(logits, masks, 'train')
+                t5 = time.time()
 
+                if z % 100 == 0:
+                    # write result
+                    pred = logits.argmax(1)
+                    v = np.random.randint(0, len(pred)-1)
+                    vis_pred = pred[v].cpu().numpy()*2555
+                    vis_gt = masks[v].cpu().numpy()*2555
+                    vis = np.concatenate([vis_pred, np.zeros((1024, 50)), vis_gt], 1)
+                    cv2.imwrite('vis.jpg', vis)
+
+                # print(f'data: {t2-t1:.4f} model+loss: {t3-t2:.4f} update: {t4-t3:.4f} iou+log: {t5-t4:.4f}')
             self._log_tensorboard(epoch, stage="train")
 
             # Validation Phase

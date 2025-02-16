@@ -173,7 +173,7 @@ class OhemCELoss(nn.Module):
         super(OhemCELoss, self).__init__()
         self.thresh = -torch.log(torch.tensor(thresh, requires_grad=False, dtype=torch.float)).to(device)
         self.lb_ignore = lb_ignore
-        self.criteria = nn.CrossEntropyLoss(ignore_index=lb_ignore, reduction='none')
+        self.criteria = nn.CrossEntropyLoss(ignore_index=lb_ignore, reduction='none', weight=torch.tensor([1, 1000], device=device).to(torch.float))
 
     def forward(self, logits, labels):
         n_min = labels[labels != self.lb_ignore].numel() // 16
